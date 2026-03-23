@@ -1,12 +1,7 @@
 """Analyse downloaded creative images and generate a Markdown report.
 
-Two analysis tiers:
-
-1. **Basic** (offline, Pillow-only) — dimensions, file size, dominant
-   colours via K-means, aspect-ratio distribution.
-2. **LLM Vision** (optional) — reserved interface for calling a vision
-   model through the OpenClaw model channel to describe content, style,
-   and copy patterns.
+Produces structured insights from metadata + basic image analysis,
+with a reserved interface for LLM Vision deep analysis.
 """
 from __future__ import annotations
 
@@ -16,7 +11,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from PIL import Image
 
@@ -24,10 +19,6 @@ from src.config import AnalysisConfig
 
 logger = logging.getLogger(__name__)
 
-
-# ------------------------------------------------------------------
-# Data structures
-# ------------------------------------------------------------------
 
 @dataclass
 class ImageStats:
@@ -38,7 +29,6 @@ class ImageStats:
     file_size_kb: float = 0.0
     dominant_colours: list[str] = field(default_factory=list)
     aspect_ratio: str = ""
-    llm_description: str = ""
 
 
 @dataclass
@@ -47,38 +37,24 @@ class ReportData:
     total_items: int = 0
     items: list[dict] = field(default_factory=list)
     image_stats: list[ImageStats] = field(default_factory=list)
-    channel_distribution: dict[str, int] = field(default_factory=dict)
-    size_distribution: dict[str, int] = field(default_factory=dict)
-    llm_summary: str = ""
 
-
-# ------------------------------------------------------------------
-# Colour helpers (simple K-means on pixel sample)
-# ------------------------------------------------------------------
 
 def _dominant_colours(img: Image.Image, n: int = 3) -> list[str]:
-    """Return the top-*n* dominant colours as hex strings."""
     small = img.copy()
     small.thumbnail((64, 64))
     if small.mode != "RGB":
         small = small.convert("RGB")
-
     try:
         pixels = list(small.get_flattened_data())
     except AttributeError:
         pixels = list(small.getdata())
     if not pixels:
         return []
-
     counter: Counter[tuple[int, int, int]] = Counter()
     for px in pixels:
         quantized = (px[0] // 32 * 32, px[1] // 32 * 32, px[2] // 32 * 32)
         counter[quantized] += 1
-
-    return [
-        f"#{r:02x}{g:02x}{b:02x}"
-        for (r, g, b), _ in counter.most_common(n)
-    ]
+    return [f"#{r:02x}{g:02x}{b:02x}" for (r, g, b), _ in counter.most_common(n)]
 
 
 def _aspect_label(w: int, h: int) -> str:
@@ -92,50 +68,17 @@ def _aspect_label(w: int, h: int) -> str:
     return "方形"
 
 
-# ------------------------------------------------------------------
-# LLM Vision interface (reserved)
-# ------------------------------------------------------------------
-
-def analyze_with_llm(
-    image_path: Path,
-    model_config: dict[str, Any],
-) -> str:
-    """Call a vision-capable LLM to describe the creative.
-
-    This is a **reserved interface**.  When an OpenClaw model channel
-    that supports vision is available, implement the HTTP call here
-    and return a text description.
-
-    Parameters
-    ----------
-    image_path:
-        Local path to the image file.
-    model_config:
-        Dict with at least ``{"model": "<channel-name>"}``.  May
-        contain ``api_base``, ``api_key``, etc. depending on the
-        provider.
-
-    Returns
-    -------
-    str
-        Natural-language description of the image content.
-    """
-    logger.info("LLM Vision 分析暂未实现 — 预留接口 (%s)", image_path.name)
+def analyze_with_llm(image_path: Path, model_config: dict[str, Any]) -> str:
+    """Reserved: call vision LLM to describe the creative."""
+    logger.info("LLM Vision not implemented yet (%s)", image_path.name)
     return ""
 
 
-# ------------------------------------------------------------------
-# Core analyser
-# ------------------------------------------------------------------
-
 class CreativeAnalyzer:
-    """Analyse a set of downloaded creative images."""
-
     def __init__(self, config: AnalysisConfig) -> None:
         self._cfg = config
 
     def analyze(self, image_dir: Path) -> ReportData:
-        """Run analysis on all images inside *image_dir*."""
         meta_path = image_dir / "metadata.json"
         metadata: list[dict] = []
         if meta_path.exists():
@@ -152,24 +95,9 @@ class CreativeAnalyzer:
             items=metadata,
         )
 
-        channel_counter: Counter[str] = Counter()
-        size_counter: Counter[str] = Counter()
-
         for img_path in image_files:
             stats = self._analyze_one(img_path)
             report.image_stats.append(stats)
-            size_counter[stats.aspect_ratio] += 1
-
-        for item in metadata:
-            ch = item.get("channel", "")
-            if ch:
-                channel_counter[ch] += 1
-
-        report.channel_distribution = dict(channel_counter.most_common())
-        report.size_distribution = dict(size_counter.most_common())
-
-        if self._cfg.llm_enabled and self._cfg.llm_model:
-            report.llm_summary = self._run_llm_summary(image_files)
 
         return report
 
@@ -184,132 +112,163 @@ class CreativeAnalyzer:
                     stats.dominant_colours = _dominant_colours(img)
                 stats.aspect_ratio = _aspect_label(stats.width, stats.height)
         except Exception as exc:
-            logger.warning("分析失败 %s: %s", path.name, exc)
+            logger.warning("Analysis failed %s: %s", path.name, exc)
         return stats
-
-    def _run_llm_summary(self, image_files: list[Path]) -> str:
-        """Batch-call LLM Vision for all images and produce a summary."""
-        descriptions: list[str] = []
-        model_cfg = {"model": self._cfg.llm_model}
-        for path in image_files:
-            desc = analyze_with_llm(path, model_cfg)
-            if desc:
-                descriptions.append(f"#{path.stem}: {desc}")
-        if not descriptions:
-            return ""
-        return "\n".join(descriptions)
 
 
 # ------------------------------------------------------------------
-# Markdown report generator
+# Markdown report
 # ------------------------------------------------------------------
 
 def generate_markdown_report(report: ReportData, image_dir: Path) -> str:
-    """Render a ``ReportData`` object into a Markdown string."""
     lines: list[str] = []
+    items = report.items
 
-    lines.append("# 广大大本周买量素材 TOP20 分析报告")
+    lines.append("# 广大大本周买量素材 TOP 分析报告")
     lines.append("")
-    lines.append(f"> 生成时间: {report.generated_at} | 数据来源: guangdada.net")
+    lines.append(f"> 生成时间: {report.generated_at} | 数据来源: guangdada.net 每周热门榜")
     lines.append("")
 
-    # ---- Overview ----
+    # === Overview ===
     lines.append("## 概览")
     lines.append("")
-    lines.append(f"- 采集素材数: {report.total_items}")
+    lines.append(f"- 采集素材数: **{report.total_items}**")
 
-    if report.channel_distribution:
-        parts = ", ".join(f"{ch} ({cnt})" for ch, cnt in report.channel_distribution.items())
-        lines.append(f"- 主要媒体渠道: {parts}")
+    # Popularity range
+    pops = [it.get("popularity", "") for it in items if it.get("popularity")]
+    if pops:
+        lines.append(f"- 人气值范围: {pops[-1]} ~ {pops[0]}")
 
-    if report.size_distribution:
-        total = sum(report.size_distribution.values()) or 1
-        parts = ", ".join(
-            f"{label} ({cnt}/{total}, {cnt * 100 // total}%)"
-            for label, cnt in report.size_distribution.items()
-        )
-        lines.append(f"- 版式分布: {parts}")
+    # Industry distribution
+    ind_counter: Counter[str] = Counter()
+    for it in items:
+        for tag in it.get("industry_tags", []):
+            ind_counter[tag] += 1
+    if ind_counter:
+        parts = ", ".join(f"**{tag}** ({cnt})" for tag, cnt in ind_counter.most_common(8))
+        lines.append(f"- 行业分布: {parts}")
 
-    if report.image_stats:
-        sizes = [f"{s.width}x{s.height}" for s in report.image_stats if s.width]
-        if sizes:
-            common = Counter(sizes).most_common(3)
-            parts = ", ".join(f"{sz} ({cnt})" for sz, cnt in common)
-            lines.append(f"- 常见尺寸: {parts}")
+    # Style distribution
+    style_counter: Counter[str] = Counter()
+    for it in items:
+        for tag in it.get("style_tags", []):
+            style_counter[tag] += 1
+    if style_counter:
+        parts = ", ".join(f"{tag} ({cnt})" for tag, cnt in style_counter.most_common(8))
+        lines.append(f"- 创意风格: {parts}")
 
-    lines.append("")
-
-    # ---- Item table ----
-    lines.append("## TOP20 素材列表")
-    lines.append("")
-    lines.append("| 排名 | 预览 | 标题 | 投放天数 | 渠道 | 尺寸 | 文件大小 |")
-    lines.append("|------|------|------|---------|------|------|---------|")
-
-    for item_meta, stats in _zip_items(report):
-        rank = item_meta.get("rank", "")
-        title = item_meta.get("title", "") or "-"
-        days = item_meta.get("days", "") or "-"
-        channel = item_meta.get("channel", "") or "-"
-        img_ref = f"![{rank}](./{stats.path})" if stats.path else "-"
-        size = f"{stats.width}x{stats.height}" if stats.width else "-"
-        fsize = f"{stats.file_size_kb} KB" if stats.file_size_kb else "-"
-        lines.append(f"| {rank} | {img_ref} | {title} | {days} | {channel} | {size} | {fsize} |")
-
-    lines.append("")
-
-    # ---- Colour palette ----
-    all_colours: Counter[str] = Counter()
+    # Aspect ratio
+    aspect_counter: Counter[str] = Counter()
     for s in report.image_stats:
-        for c in s.dominant_colours:
-            all_colours[c] += 1
-    if all_colours:
-        lines.append("## 色彩趋势")
+        if s.aspect_ratio and s.aspect_ratio != "unknown":
+            aspect_counter[s.aspect_ratio] += 1
+    if aspect_counter:
+        total = sum(aspect_counter.values()) or 1
+        parts = ", ".join(f"{label} {cnt*100//total}%" for label, cnt in aspect_counter.most_common())
+        lines.append(f"- 版式: {parts}")
+
+    # Duration
+    durations = [it.get("duration_days", 0) for it in items if it.get("duration_days")]
+    if durations:
+        avg = sum(durations) / len(durations)
+        lines.append(f"- 平均投放天数: **{avg:.0f}天** (最短 {min(durations)}天, 最长 {max(durations)}天)")
+
+    lines.append("")
+
+    # === Top advertisers ===
+    adv_counter: Counter[str] = Counter()
+    for it in items:
+        adv = it.get("advertiser", "")
+        if adv:
+            adv_counter[adv] += 1
+    if adv_counter:
+        lines.append("## 热门广告主")
         lines.append("")
-        top_colours = all_colours.most_common(6)
-        lines.append("最常出现的主色调:")
-        lines.append("")
-        for colour, cnt in top_colours:
-            lines.append(f"- `{colour}` ({cnt} 次)")
+        lines.append("| 广告主 | 上榜素材数 | 发行商 |")
+        lines.append("|--------|-----------|--------|")
+        adv_publisher: dict[str, str] = {}
+        for it in items:
+            adv = it.get("advertiser", "")
+            pub = it.get("publisher", "")
+            if adv and pub:
+                adv_publisher[adv] = pub
+        for adv, cnt in adv_counter.most_common(10):
+            pub = adv_publisher.get(adv, "-")
+            lines.append(f"| {adv} | {cnt} | {pub} |")
         lines.append("")
 
-    # ---- LLM summary ----
-    if report.llm_summary:
-        lines.append("## AI 趋势总结")
-        lines.append("")
-        lines.append(report.llm_summary)
-        lines.append("")
-    else:
-        lines.append("## 趋势总结")
-        lines.append("")
-        lines.append("> LLM Vision 分析未启用。启用后将在此输出 AI 归纳的素材风格、文案特点和视觉趋势。")
-        lines.append("> 设置 `analysis.llm_enabled: true` 和 `analysis.llm_model` 以开启。")
-        lines.append("")
+    # === Item table ===
+    lines.append("## 素材详情")
+    lines.append("")
+    lines.append("| # | 预览 | 广告主 | 人气值 | 行业 | 风格 | 投放天数 | 日期范围 |")
+    lines.append("|---|------|--------|--------|------|------|---------|---------|")
 
+    stats_by_rank: dict[int, ImageStats] = {}
+    for s in report.image_stats:
+        # Match by filename prefix like "01_"
+        try:
+            r = int(s.path.split("_")[0])
+            stats_by_rank[r] = s
+        except (ValueError, IndexError):
+            pass
+
+    for it in items:
+        rank = it.get("rank", "")
+        adv = it.get("advertiser", "") or "-"
+        pop = it.get("popularity", "") or "-"
+        ind = ", ".join(it.get("industry_tags", [])) or "-"
+        sty = ", ".join(it.get("style_tags", [])) or "-"
+        dur = it.get("duration_days", "")
+        dur_str = f"{dur}天" if dur else "-"
+        ds = it.get("date_start", "")
+        de = it.get("date_end", "")
+        date_range = f"{ds}~{de}" if ds and de else "-"
+
+        s = stats_by_rank.get(rank)
+        img_ref = f"![{rank}](./{s.path})" if s else "-"
+
+        lines.append(f"| {rank} | {img_ref} | {adv} | {pop} | {ind} | {sty} | {dur_str} | {date_range} |")
+
+    lines.append("")
+
+    # === Insights ===
+    lines.append("## 趋势洞察")
+    lines.append("")
+
+    if ind_counter:
+        top_ind = ind_counter.most_common(1)[0]
+        lines.append(f"1. **行业集中度**: 本周热门素材以「{top_ind[0]}」行业为主 ({top_ind[1]}/{report.total_items} 个素材)，")
+        if len(ind_counter) > 1:
+            second = ind_counter.most_common(2)[1]
+            lines.append(f"   其次是「{second[0]}」({second[1]} 个)。")
+
+    if style_counter:
+        top_style = style_counter.most_common(1)[0]
+        lines.append(f"2. **创意风格**: 「{top_style[0]}」是最常见的创意形式 ({top_style[1]} 次)，")
+        real_person = sum(cnt for tag, cnt in style_counter.items() if "真人" in tag or "口播" in tag or "情景" in tag)
+        design = sum(cnt for tag, cnt in style_counter.items() if "设计" in tag or "插画" in tag or "卡通" in tag)
+        if real_person and design:
+            lines.append(f"   真人类素材出现 {real_person} 次 vs 设计类 {design} 次。")
+
+    if durations:
+        long_run = [it for it in items if it.get("duration_days", 0) >= 30]
+        if long_run:
+            names = ", ".join(it.get("advertiser", "?")[:20] for it in long_run[:3])
+            lines.append(f"3. **长效素材**: {len(long_run)} 个素材投放超过 30 天 ({names})，说明这些创意具有持久吸引力。")
+
+    if adv_counter:
+        repeat_advs = [(a, c) for a, c in adv_counter.items() if c >= 2]
+        if repeat_advs:
+            names = ", ".join(f"{a}({c}个)" for a, c in repeat_advs[:3])
+            lines.append(f"4. **重复上榜**: {names} — 同一广告主多素材上榜，值得重点关注其投放策略。")
+
+    lines.append("")
     return "\n".join(lines)
 
 
-def _zip_items(report: ReportData):
-    """Yield ``(item_dict, ImageStats)`` pairs, filling gaps."""
-    stats_by_name: dict[str, ImageStats] = {s.path: s for s in report.image_stats}
-    empty = ImageStats()
-
-    if report.items:
-        for item in report.items:
-            fname_candidates = [
-                s for s in report.image_stats
-                if s.path.startswith(f"{item.get('rank', 0):02d}_")
-            ]
-            stats = fname_candidates[0] if fname_candidates else empty
-            yield item, stats
-    else:
-        for stats in report.image_stats:
-            yield {"rank": "", "title": stats.path}, stats
-
-
 def save_report(report: ReportData, image_dir: Path) -> Path:
-    """Write the Markdown report to *image_dir* / ``report.md``."""
     md = generate_markdown_report(report, image_dir)
     out = image_dir / "report.md"
     out.write_text(md, encoding="utf-8")
-    logger.info("报告已保存至 %s", out)
+    logger.info("Report saved to %s", out)
     return out

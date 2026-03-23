@@ -16,7 +16,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import asdict
+import dataclasses
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -105,7 +105,8 @@ class ImageDownloader:
         return saved
 
     def _download_one(self, item: CreativeItem) -> Optional[Path]:
-        title = _sanitize_filename(item.title) if item.title else "untitled"
+        name = item.advertiser or item.title or "untitled"
+        title = _sanitize_filename(name)
         prefix = f"{item.rank:02d}"
 
         try:
@@ -132,6 +133,12 @@ class ImageDownloader:
 
     def _write_metadata(self, items: list[CreativeItem]) -> None:
         meta_path = self._out_dir / "metadata.json"
-        data = [asdict(it) for it in items]
+        data = []
+        for it in items:
+            d = dataclasses.asdict(it)
+            d["title"] = it.title
+            d["days"] = it.days
+            d["channel"] = it.channel
+            data.append(d)
         meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info("元数据已写入 %s", meta_path)
+        logger.info("Metadata written to %s", meta_path)
