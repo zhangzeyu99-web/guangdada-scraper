@@ -96,6 +96,9 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     today = time.strftime("%Y-%m-%d")
     run_label = f"{today}_{period}_top{top_n}"
 
+    if args.output_dir:
+        cfg.output.base_dir = args.output_dir
+
     scraper = GuangdadaScraper(cfg.scraper)
     try:
         scraper.start()
@@ -261,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_scrape = sub.add_parser("scrape", help="爬取 + 下载 + 分析")
     p_scrape.add_argument("--top", type=int, default=20, help="抓取前 N 条 (默认 20)")
     p_scrape.add_argument("--period", default="weekly", choices=["weekly", "daily", "monthly"], help="时间周期")
+    p_scrape.add_argument("--output-dir", default=None, help="自定义输出目录（绝对路径）")
     p_scrape.add_argument("--no-analyze", action="store_true", help="只下载不分析")
     p_scrape.add_argument("--no-headless", action="store_true", help="使用有头浏览器（用于调试/验证码）")
 
