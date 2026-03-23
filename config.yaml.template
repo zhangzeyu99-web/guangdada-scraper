@@ -1,0 +1,19 @@
+scraper:
+  headless: true
+  timeout_ms: 30000
+  cookie_reuse: true
+  user_agent: ""
+
+output:
+  base_dir: "output/guangdada"
+  image_format: "original"
+  report_format: "md"
+
+analysis:
+  basic_enabled: true
+  llm_enabled: false
+  llm_model: ""
+
+feishu:
+  enabled: false
+  mode: "notify"

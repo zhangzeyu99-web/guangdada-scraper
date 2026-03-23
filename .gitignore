@@ -1,0 +1,19 @@
+# Credentials & browser state (stored in ~/.openclaw/)
+*.key
+*.credentials.enc
+guangdada_state/
+
+# Output (generated data)
+output/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Config (may contain sensitive overrides)
+config.yaml
+
+# OS
+.DS_Store
+Thumbs.db
